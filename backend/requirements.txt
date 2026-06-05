@@ -1,0 +1,9 @@
+fastapi>=0.100.0
+uvicorn>=0.22.0
+sqlalchemy>=2.0.0
+mysql-connector-python>=8.0.33
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+requests>=2.31.0
+opentelemetry-proto>=1.19.0
+protobuf>=4.23.0

@@ -1,0 +1,25 @@
+# Node
+node_modules/
+frontend/node_modules/
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Database
+*.db
+observability.db
+
+# Environment
+.env
+.env.*
+
+# Build
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
