@@ -23,6 +23,7 @@ import Logs from './pages/Logs';
 import Audit from './pages/Audit';
 import Alerts from './pages/Alerts';
 import LLMUsage from './pages/LLMUsage';
+import { MemoryFabric } from './pages/MemoryFabric';
 
 export interface AppInfo {
   id: number;
@@ -134,6 +135,14 @@ const App: React.FC = () => {
           >
             <Brain />
             LLM Usage
+          </button>
+
+          <button
+            className={`nav-item ${activeTab === 'memory_fabric' ? 'active' : ''}`}
+            onClick={() => setActiveTab('memory_fabric')}
+          >
+            <Layers />
+            Memory Fabric
           </button>
 
           <button
@@ -266,6 +275,12 @@ const App: React.FC = () => {
             <LLMUsage
               selectedAppId={selectedAppId}
               appsList={apps}
+              refreshTrigger={refreshTrigger}
+            />
+          )}
+          {activeTab === 'memory_fabric' && (
+            <MemoryFabric
+              selectedAppId={selectedAppId}
               refreshTrigger={refreshTrigger}
             />
           )}

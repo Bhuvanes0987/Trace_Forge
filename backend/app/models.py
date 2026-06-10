@@ -104,3 +104,69 @@ class AlertIncident(Base):
     resolved_at = Column(DateTime, nullable=True)
 
     app = relationship("RegisteredApp", back_populates="alerts")
+
+
+# ==========================================
+# ENTERPRISE MEMORY FABRIC & CONTEXT MODELS (ADDITIVE)
+# ==========================================
+
+class MemoryHot(Base):
+    __tablename__ = "memory_hot"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(100), unique=True, index=True)
+    user_identifier = Column(String(100), index=True, nullable=True)
+    active_context = Column(Text, nullable=False)  # AI synthesized active context
+    last_event_time = Column(DateTime, default=datetime.datetime.utcnow)
+    ttl_seconds = Column(Integer, default=1800)  # 30 min expiration
+
+class MemoryStructured(Base):
+    __tablename__ = "memory_structured"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(String(100), unique=True, index=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(String(100), index=True)
+    app_name = Column(String(100), index=True)
+    event_type = Column(String(100))  # e.g. "ORDER_PLACED", "TICKET_CREATED", "CHECKOUT_FAILED"
+    description = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    metadata_json = Column(JSON, nullable=True)
+
+class MemorySemantic(Base):
+    __tablename__ = "memory_semantic"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(100), index=True, nullable=True)
+    content_type = Column(String(50))  # "llm_interaction" or "summary"
+    prompt = Column(Text, nullable=True)
+    response = Column(Text, nullable=False)
+    summary = Column(Text, nullable=True)
+    model_name = Column(String(100), nullable=True)
+    embedding_vector = Column(JSON, nullable=True)  # Simulated floats array
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+
+class MemoryGraph(Base):
+    __tablename__ = "memory_graph_edges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_type = Column(String(50), nullable=False)  # e.g. "USER", "SESSION", "APP", "EVENT"
+    source_id = Column(String(100), nullable=False)
+    source_label = Column(String(100), nullable=False)
+    target_type = Column(String(50), nullable=False)
+    target_id = Column(String(100), nullable=False)
+    target_label = Column(String(100), nullable=False)
+    relationship = Column(String(100), nullable=False)  # e.g. "VISITED", "TRIGGERED", "BELONGS_TO", "COMMUNICATED"
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+
+class MemoryLearning(Base):
+    __tablename__ = "memory_learning"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pattern_type = Column(String(100), nullable=False)  # e.g. "BEHAVIOR_PATTERN", "ANOMALY", "BOTTLENECK_PREDICTION"
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    confidence = Column(Float, default=0.85)
+    frequency = Column(Integer, default=1)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    details = Column(JSON, nullable=True)
+

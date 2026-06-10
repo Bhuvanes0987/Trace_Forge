@@ -32,6 +32,60 @@ def register_app(app: schemas.RegisteredAppCreate, db: Session = Depends(get_db)
 def list_apps(db: Session = Depends(get_db)):
     return db.query(models.RegisteredApp).all()
 
+@router.get("/stats")
+def list_apps_with_stats(db: Session = Depends(get_db)):
+    apps = db.query(models.RegisteredApp).all()
+    res = []
+    for app in apps:
+        # Query accurate count of spans, logs, metrics, audits
+        spans_count = db.query(models.TraceSpan).filter(models.TraceSpan.app_id == app.id).count()
+        logs_count = db.query(models.LogData).filter(models.LogData.app_id == app.id).count()
+        metrics_count = db.query(models.MetricData).filter(models.MetricData.app_id == app.id).count()
+        audit_count = db.query(models.AuditEvent).filter(models.AuditEvent.app_id == app.id).count()
+        
+        # Dynamically calculate knowledge, memory, context values based on dynamic counts
+        knowledge = min(100, int(60 + (spans_count * 2 + logs_count) // 5) if spans_count + logs_count > 0 else 50)
+        memory = min(100, int(40 + (spans_count * 3 + audit_count) // 4) if spans_count + audit_count > 0 else 30)
+        context = min(100, int(50 + (metrics_count * 4 + logs_count) // 3) if metrics_count + logs_count > 0 else 40)
+        
+        # Get recent events from OTel database for this application
+        recent_spans = db.query(models.TraceSpan).filter(models.TraceSpan.app_id == app.id).order_by(models.TraceSpan.start_time.desc()).limit(3).all()
+        events = []
+        for s in recent_spans:
+            events.append(f"{s.name} \u2014 {s.status_code} \u2014 {s.duration_ms:.1f}ms")
+            
+        # Get learned behavior (RLM) description from DB or fallback
+        learned = "Enrichment pipeline active. Capturing trace spans and log streams dynamically."
+        learning_item = db.query(models.MemoryLearning).filter(
+            (models.MemoryLearning.details.like(f"%{app.name}%")) | 
+            (models.MemoryLearning.description.like(f"%{app.name}%"))
+        ).order_by(models.MemoryLearning.timestamp.desc()).first()
+        if learning_item:
+            learned = learning_item.description
+            
+        res.append({
+            "id": app.id,
+            "app_id": app.app_id,
+            "name": app.name,
+            "environment": app.environment,
+            "tech_stack": app.tech_stack,
+            "url": app.url,
+            "api_key": app.api_key,
+            "status": app.status,
+            "knowledge": knowledge,
+            "memory": memory,
+            "context": context,
+            "signals": {
+                "traces": spans_count,
+                "logs": logs_count,
+                "metrics": metrics_count,
+                "audit": audit_count
+            },
+            "events": events if events else ["No telemetry events captured yet"],
+            "learned": learned
+        })
+    return res
+
 @router.get("/{app_id}", response_model=schemas.RegisteredAppResponse)
 def get_app(app_id: str, db: Session = Depends(get_db)):
     app = db.query(models.RegisteredApp).filter(models.RegisteredApp.app_id == app_id).first()
@@ -166,3 +220,4 @@ def build_otel_env_file_snippet(app_name: str, api_key: str) -> str:
 def settings_header_key():
     from ..config import settings
     return settings.INGEST_API_KEY_HEADER
+

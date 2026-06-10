@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .database import engine, Base, migrate_registered_app_owner_email_to_url
-from .routers import apps, telemetry, audit, dashboards, alerts
+from .routers import apps, telemetry, audit, dashboards, alerts, intelligence
 
 # Ensure schema is aligned with model changes
 migrate_registered_app_owner_email_to_url()
@@ -32,6 +32,7 @@ app.include_router(telemetry.router)
 app.include_router(audit.router)
 app.include_router(dashboards.router)
 app.include_router(alerts.router)
+app.include_router(intelligence.router)
 
 @app.get("/")
 def read_root():

@@ -35,6 +35,113 @@ def seed_default_applications(db: Session):
             
     return seeded_apps
 
+def seed_memory_fabric(db: Session):
+    # Check if memory fabric tables are empty
+    if db.query(models.MemoryHot).count() > 0:
+        return
+        
+    print("🧠 Seeding memory fabric data...")
+    sessions = ["session-a1b2c3d4", "session-e5f6g7h8", "session-i9j0k1l2"]
+    emails = ["alex.developer@company.com", "sarah.pm@company.com", "john.ops@company.com"]
+    
+    # Seed Hot Memory
+    db.add(models.MemoryHot(
+        session_id=sessions[0],
+        user_identifier=emails[0],
+        active_context="User experienced a database connection pool timeout while checking out a cart value of $1,250 on FlowTracer, then opened FrictionX support chat to confirm the order status.",
+        last_event_time=datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
+    ))
+    db.add(models.MemoryHot(
+        session_id=sessions[1],
+        user_identifier=emails[1],
+        active_context="User successfully logged in and is checking the metrics dashboards on FlowTracer, displaying normal system indicators.",
+        last_event_time=datetime.datetime.utcnow() - datetime.timedelta(minutes=15)
+    ))
+    
+    # Seed Structured Memory (Facts)
+    db.add(models.MemoryStructured(
+        session_id=sessions[0],
+        app_name="FlowTracer",
+        event_type="CHECKOUT_FAILED",
+        description="Checkout workflow aborted due to DB connection pool exhaustion (limit 90 reached)",
+        timestamp=datetime.datetime.utcnow() - datetime.timedelta(minutes=8)
+    ))
+    db.add(models.MemoryStructured(
+        session_id=sessions[0],
+        app_name="FrictionX",
+        event_type="SUPPORT_CHAT",
+        description="User initiated AI support chat regarding checkout failure",
+        timestamp=datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
+    ))
+    db.add(models.MemoryStructured(
+        session_id=sessions[1],
+        app_name="FlowTracer",
+        event_type="DASHBOARD_VIEW",
+        description="User viewed app system analytics page",
+        timestamp=datetime.datetime.utcnow() - datetime.timedelta(minutes=16)
+    ))
+    
+    # Seed Semantic Memory
+    db.add(models.MemorySemantic(
+        session_id=sessions[0],
+        content_type="llm_interaction",
+        prompt="Hi, my checkout failed on FlowTracer. It said connection pool exhausted. Did my order go through? Can I get a refund?",
+        response="Hello! I can see that your checkout failed with a database connection pool timeout, and no payment was processed. Your order did not go through, so you will not be charged. I can assist you with retrying or help request a credit waiver.",
+        summary="User checking failed checkout status on FlowTracer and requesting refund confirmation.",
+        model_name="gemini-2.5-flash",
+        timestamp=datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
+    ))
+    
+    # Seed Graph Memory
+    db.add(models.MemoryGraph(
+        source_type="USER", source_id=emails[0], source_label=emails[0],
+        target_type="SESSION", target_id=sessions[0], target_label="Session A1B2",
+        relationship="OWNED_SESSION"
+    ))
+    db.add(models.MemoryGraph(
+        source_type="SESSION", source_id=sessions[0], target_type="APP", target_id="FlowTracer",
+        source_label="Session A1B2", target_label="FlowTracer", relationship="ACCESSED_APP"
+    ))
+    db.add(models.MemoryGraph(
+        source_type="SESSION", source_id=sessions[0], target_type="APP", target_id="FrictionX",
+        source_label="Session A1B2", target_label="FrictionX", relationship="ACCESSED_APP"
+    ))
+    db.add(models.MemoryGraph(
+        source_type="SESSION", source_id=sessions[0], target_type="EVENT", target_id="checkout-failure",
+        source_label="Session A1B2", target_label="Checkout Failure", relationship="TRIGGERED_EVENT"
+    ))
+    
+    db.add(models.MemoryGraph(
+        source_type="USER", source_id=emails[1], source_label=emails[1],
+        target_type="SESSION", target_id=sessions[1], target_label="Session E5F6",
+        relationship="OWNED_SESSION"
+    ))
+    db.add(models.MemoryGraph(
+        source_type="SESSION", source_id=sessions[1], target_type="APP", target_id="FlowTracer",
+        source_label="Session E5F6", target_label="FlowTracer", relationship="ACCESSED_APP"
+    ))
+    
+    # Seed Learning Memory
+    db.add(models.MemoryLearning(
+        pattern_type="BEHAVIOR_PATTERN",
+        title="DB Exhaustion Support Escalation",
+        description="Database Connection Pool Exhaustion triggers immediate support chat escalations with questions about order state.",
+        confidence=0.94,
+        frequency=12,
+        details={"impacted_service": "flowtracer-api", "escalation_target": "frictionx-llm-engine"}
+    ))
+    db.add(models.MemoryLearning(
+        pattern_type="BOTTLENECK_PREDICTION",
+        title="Impending FlowTracer Connection Bottleneck",
+        description="FlowTracer db connections frequently exhaust during peak traffic. Recommended pool size expansion from 90 to 150.",
+        confidence=0.88,
+        frequency=3,
+        details={"current_limit": 90, "suggested_limit": 150}
+    ))
+    
+    db.commit()
+    print("✅ Memory fabric seeded.")
+
 def generate_telemetry_batch(db: Session, apps: dict):
     """Generate LLM usage metrics for FrictionX application"""
     
@@ -238,6 +345,9 @@ if __name__ == "__main__":
     try:
         print("Seeding default microservice applications...")
         apps = seed_default_applications(db)
+        
+        # Seed Memory Fabric
+        seed_memory_fabric(db)
         
         print("Generating historical telemetry data (30 time-points)...")
         # Generate 30 past points of metrics/traces to make graphs look complete immediately
