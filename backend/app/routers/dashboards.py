@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 import datetime
 from ..database import get_db
 from .. import models
-from sqlalchemy import func, desc, and_, case, case, case
+from sqlalchemy import func, desc, and_, case, case, case, or_
 
 router = APIRouter(
     prefix="/api/v1/dashboards",
@@ -250,6 +250,88 @@ def get_traces_list(
         })
         
     return results
+
+
+@router.get("/llm-usage")
+def get_llm_usage(
+    app_id: Optional[int] = Query(None),
+    minutes_ago: int = Query(60),
+    db: Session = Depends(get_db)
+):
+    """
+    Get LLM usage breakdown by model, tokens, and cost.
+    """
+    filter_time = datetime.datetime.utcnow() - datetime.timedelta(minutes=minutes_ago)
+    
+    llm_metrics = db.query(models.MetricData).filter(
+        and_(
+            models.MetricData.metric_name.in_([
+                "llm_total_tokens",
+                "llm_input_tokens",
+                "llm_output_tokens",
+                "llm_cost_usd",
+                "llm_response_time_ms"
+            ]),
+            models.MetricData.timestamp >= filter_time
+        )
+    )
+    
+    if app_id is not None:
+        llm_metrics = llm_metrics.filter(models.MetricData.app_id == app_id)
+    
+    llm_metrics = llm_metrics.order_by(models.MetricData.timestamp.desc()).limit(500).all()
+    
+    # Aggregate by model
+    model_stats = {}
+    for metric in llm_metrics:
+        model = metric.labels.get("model", "unknown") if metric.labels else "unknown"
+        if model not in model_stats:
+            model_stats[model] = {
+                "total_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_cost_usd": 0.0,
+                "call_count": 0,
+                "avg_response_time_ms": 0.0
+            }
+        
+        if metric.metric_name == "llm_total_tokens":
+            model_stats[model]["total_tokens"] += int(metric.value)
+        elif metric.metric_name == "llm_input_tokens":
+            model_stats[model]["input_tokens"] += int(metric.value)
+        elif metric.metric_name == "llm_output_tokens":
+            model_stats[model]["output_tokens"] += int(metric.value)
+        elif metric.metric_name == "llm_cost_usd":
+            model_stats[model]["total_cost_usd"] += float(metric.value)
+            model_stats[model]["call_count"] += 1
+        elif metric.metric_name == "llm_response_time_ms":
+            if model_stats[model]["call_count"] > 0:
+                model_stats[model]["avg_response_time_ms"] = float(metric.value)
+    
+    # Total aggregates
+    total_tokens = sum(s["total_tokens"] for s in model_stats.values())
+    total_cost = sum(s["total_cost_usd"] for s in model_stats.values())
+    total_calls = sum(s["call_count"] for s in model_stats.values())
+    
+    return {
+        "summary": {
+            "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost, 4),
+            "total_llm_calls": total_calls,
+            "time_window_minutes": minutes_ago
+        },
+        "by_model": {
+            model: {
+                "total_tokens": stats["total_tokens"],
+                "input_tokens": stats["input_tokens"],
+                "output_tokens": stats["output_tokens"],
+                "total_cost_usd": round(stats["total_cost_usd"], 4),
+                "call_count": stats["call_count"],
+                "avg_response_time_ms": round(stats["avg_response_time_ms"], 2)
+            }
+            for model, stats in model_stats.items()
+        }
+    }
 
 
 @router.get("/traces/{trace_id}")

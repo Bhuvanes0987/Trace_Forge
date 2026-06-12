@@ -415,30 +415,63 @@ export const MemoryFabric: React.FC<MemoryFabricProps> = ({ selectedAppId, refre
     const width = canvas.width;
     const height = canvas.height;
 
-    const nodes = graphData.nodes.map((node, i) => {
-      let startX = width / 2;
-      let startY = height / 2;
-      if (node.type === 'USER') { startX = 120; startY = height / 2; }
-      else if (node.type === 'SESSION') { startX = width / 2 - 80; startY = height / 2; }
-      else if (node.type === 'APP') { startX = width / 2 + 150; startY = 100; }
-      else if (node.type === 'EVENT') { startX = width / 2 + 150; startY = 260; }
+    const nodeMap = new Map(graphData.nodes.map(node => [node.id, node]));
+    const appTypes = new Set(['APP', 'SERVICE', 'Service']);
+    const appNodes = graphData.nodes.filter(node => appTypes.has(node.type || node.group));
+    const appIds = new Set(appNodes.map(node => node.id));
 
-      return {
-        ...node,
-        x: node.x ?? (startX + (Math.random() - 0.5) * 50),
-        y: node.y ?? (startY + (Math.random() - 0.5) * 50)
-      };
+    const sessionConnections = new Map<string, Set<string>>();
+    const directAppEdges: any[] = [];
+    const appEdgeKeys = new Set<string>();
+    const appEdges: any[] = [];
+
+    graphData.links.forEach(link => {
+      const sourceType = nodeMap.get(link.source)?.type || nodeMap.get(link.source)?.group;
+      const targetType = nodeMap.get(link.target)?.type || nodeMap.get(link.target)?.group;
+
+      if (appIds.has(link.source) && appIds.has(link.target)) {
+        directAppEdges.push(link);
+        return;
+      }
+
+      if (sourceType === 'SESSION' && appIds.has(link.target)) {
+        const apps = sessionConnections.get(link.source) || new Set<string>();
+        apps.add(link.target);
+        sessionConnections.set(link.source, apps);
+        return;
+      }
+      if (targetType === 'SESSION' && appIds.has(link.source)) {
+        const apps = sessionConnections.get(link.target) || new Set<string>();
+        apps.add(link.source);
+        sessionConnections.set(link.target, apps);
+        return;
+      }
     });
 
-    const links = graphData.links.map(link => {
-      const sourceNode = nodes.find(n => n.id === link.source);
-      const targetNode = nodes.find(n => n.id === link.target);
-      return {
-        ...link,
-        sourceNode,
-        targetNode
-      };
+    sessionConnections.forEach(appSet => {
+      const apps = Array.from(appSet);
+      for (let i = 0; i < apps.length; i++) {
+        for (let j = i + 1; j < apps.length; j++) {
+          const key = [apps[i], apps[j]].sort().join('|');
+          if (!appEdgeKeys.has(key)) {
+            appEdgeKeys.add(key);
+            appEdges.push({ source: apps[i], target: apps[j], relationship: 'shared context' });
+          }
+        }
+      }
     });
+
+    const nodes = appNodes.map(node => ({
+      ...node,
+      x: node.x ?? (width / 2 + (Math.random() - 0.5) * 120),
+      y: node.y ?? (height / 2 + (Math.random() - 0.5) * 120)
+    }));
+
+    const links = [...directAppEdges, ...appEdges].map(link => ({
+      ...link,
+      sourceNode: nodes.find(n => n.id === link.source),
+      targetNode: nodes.find(n => n.id === link.target)
+    }));
 
     for (let step = 0; step < 80; step++) {
       for (let i = 0; i < nodes.length; i++) {
@@ -446,12 +479,12 @@ export const MemoryFabric: React.FC<MemoryFabricProps> = ({ selectedAppId, refre
           const dx = nodes[j].x! - nodes[i].x!;
           const dy = nodes[j].y! - nodes[i].y!;
           const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          if (dist < 100) {
-            const force = (100 - dist) / 100 * 0.5;
-            nodes[i].x! -= dx / dist * force * 12;
-            nodes[i].y! -= dy / dist * force * 12;
-            nodes[j].x! += dx / dist * force * 12;
-            nodes[j].y! += dy / dist * force * 12;
+          if (dist < 90) {
+            const force = (90 - dist) / 90 * 0.45;
+            nodes[i].x! -= dx / dist * force * 10;
+            nodes[i].y! -= dy / dist * force * 10;
+            nodes[j].x! += dx / dist * force * 10;
+            nodes[j].y! += dy / dist * force * 10;
           }
         }
       }
@@ -461,8 +494,8 @@ export const MemoryFabric: React.FC<MemoryFabricProps> = ({ selectedAppId, refre
         const dx = l.targetNode.x! - l.sourceNode.x!;
         const dy = l.targetNode.y! - l.sourceNode.y!;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const desiredDist = 90;
-        const force = (dist - desiredDist) / dist * 0.12;
+        const desiredDist = 140;
+        const force = (dist - desiredDist) / dist * 0.08;
         l.sourceNode.x! += dx * force;
         l.sourceNode.y! += dy * force;
         l.targetNode.x! -= dx * force;
@@ -470,8 +503,8 @@ export const MemoryFabric: React.FC<MemoryFabricProps> = ({ selectedAppId, refre
       });
 
       nodes.forEach(n => {
-        n.x = Math.max(30, Math.min(width - 30, n.x!));
-        n.y = Math.max(30, Math.min(height - 30, n.y!));
+        n.x = Math.max(40, Math.min(width - 40, n.x!));
+        n.y = Math.max(40, Math.min(height - 40, n.y!));
       });
     }
 
@@ -483,64 +516,45 @@ export const MemoryFabric: React.FC<MemoryFabricProps> = ({ selectedAppId, refre
     const draw = () => {
       ctx.clearRect(0, 0, width, height);
 
-      // Web aesthetic Grid
-      ctx.strokeStyle = 'rgba(15, 23, 42, 0.03)';
-      ctx.lineWidth = 1;
-      for (let x = 0; x < width; x += 30) {
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
-      }
-      for (let y = 0; y < height; y += 30) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
-      }
-
       links.forEach(l => {
         if (!l.sourceNode || !l.targetNode) return;
         ctx.beginPath();
         ctx.moveTo(l.sourceNode.x!, l.sourceNode.y!);
         ctx.lineTo(l.targetNode.x!, l.targetNode.y!);
-        ctx.strokeStyle = 'rgba(99, 102, 241, 0.2)';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(100, 116, 139, 0.25)';
+        ctx.lineWidth = 2;
         ctx.stroke();
 
         const midX = (l.sourceNode.x! + l.targetNode.x!) / 2;
         const midY = (l.sourceNode.y! + l.targetNode.y!) / 2;
-        ctx.font = '8px monospace';
-        ctx.fillStyle = '#64748b';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.fillStyle = '#475569';
         ctx.textAlign = 'center';
-        ctx.fillText(l.relationship, midX, midY - 4);
+        ctx.fillText((l.relationship || '').replace(/_/g, ' '), midX, midY - 8);
       });
 
       nodes.forEach(n => {
-        let color = '#a78bfa';
-        let radius = 9;
-        
-        if (n.type === 'USER') { color = '#3b82f6'; radius = 13; }
-        else if (n.type === 'SESSION') { color = '#10b981'; radius = 10; }
-        else if (n.type === 'APP') { color = '#f59e0b'; radius = 12; }
-        else if (n.type === 'EVENT') { color = '#ef4444'; radius = 9; }
+        const color = '#8b5cf6';
+        const radius = 14;
 
-        const gradient = ctx.createRadialGradient(n.x!, n.y!, 1, n.x!, n.y!, radius * 2.2);
-        gradient.addColorStop(0, color + '30');
+        const gradient = ctx.createRadialGradient(n.x!, n.y!, 1, n.x!, n.y!, radius * 2.5);
+        gradient.addColorStop(0, 'rgba(139,92,246,0.24)');
         gradient.addColorStop(1, 'rgba(255,255,255,0)');
         ctx.fillStyle = gradient;
-        ctx.beginPath(); ctx.arc(n.x!, n.y!, radius * 2.2, 0, 2 * Math.PI); ctx.fill();
+        ctx.beginPath(); ctx.arc(n.x!, n.y!, radius * 2.5, 0, 2 * Math.PI); ctx.fill();
 
         ctx.beginPath(); ctx.arc(n.x!, n.y!, radius, 0, 2 * Math.PI);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2.5;
+        ctx.lineWidth = 3;
         ctx.stroke();
 
-        ctx.font = '600 9px var(--font-sans)';
-        ctx.fillStyle = '#0f172a';
+        ctx.font = '600 11px Inter, sans-serif';
+        ctx.fillStyle = '#111827';
         ctx.textAlign = 'center';
-        const truncated = n.label.length > 15 ? n.label.substring(0, 12) + '...' : n.label;
-        ctx.fillText(truncated, n.x!, n.y! + radius + 11);
-        
-        ctx.font = '500 7px var(--font-mono)';
-        ctx.fillStyle = '#64748b';
-        ctx.fillText(n.type, n.x!, n.y! - radius - 4);
+        const truncated = n.label.length > 18 ? n.label.substring(0, 15) + '...' : n.label;
+        ctx.fillText(truncated, n.x!, n.y! + radius + 14);
       });
     };
 
@@ -779,24 +793,21 @@ export const MemoryFabric: React.FC<MemoryFabricProps> = ({ selectedAppId, refre
           {/* Seed Simulation & Canvas graph integrated inside Overview */}
           <div className="grid-2col" style={{ gridTemplateColumns: '2.2fr 1fr', gap: '1.5rem' }}>
             
-            {/* Live Knowledge Graph representation */}
+            {/* Live Application Knowledge Graph */}
             <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <Share2 size={16} style={{ color: 'var(--status-success)' }} /> Cross-App Context Knowledge Graph
-                </h4>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Share2 size={16} style={{ color: 'var(--status-success)' }} /> Application Knowledge Sharing Graph
+                  </h4>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Showing app-to-app knowledge links and shared context, with sessions filtered out.</div>
+                </div>
                 <div style={{ display: 'flex', gap: '0.65rem', fontSize: '0.65rem', fontWeight: 500 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#3b82f6', display: 'inline-block' }}></span> User
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#8b5cf6', display: 'inline-block' }}></span> App / Service
                   </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }}></span> Session
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#f59e0b', display: 'inline-block' }}></span> Service
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#ef4444', display: 'inline-block' }}></span> Event
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#64748b', display: 'inline-block' }}></span> Shared knowledge / dependency
                   </span>
                 </div>
               </div>
@@ -831,6 +842,22 @@ export const MemoryFabric: React.FC<MemoryFabricProps> = ({ selectedAppId, refre
                 <Play size={14} fill="currentColor" />
                 {seeding ? 'Simulating Journey...' : 'Trigger Simulation Journey'}
               </button>
+            </div>
+          </div>
+
+          <div className="glass-card" style={{ marginTop: '1.5rem', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Share2 size={16} style={{ color: 'var(--status-success)' }} /> Shared Knowledge Graph
+              </h4>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Focuses on app-to-app knowledge and dependency sharing.</span>
+            </div>
+            <div style={{ width: '100%', minHeight: '520px', borderRadius: '16px', overflow: 'hidden', border: '1px solid var(--border-glass)', background: 'var(--bg-tertiary)' }}>
+              <iframe
+                title="Shared Knowledge Graph"
+                src="http://localhost:8003/static/graph.html"
+                style={{ width: '100%', height: '520px', border: 'none' }}
+              />
             </div>
           </div>
 

@@ -14,15 +14,17 @@ A production-grade **Enterprise Observability + Organizational Memory** platform
 3. [Feature Modules](#feature-modules)
 4. [Memory Fabric Tier Architecture](#memory-fabric-tier-architecture)
 5. [Context Intelligence Engine (Gemini 2.5 Flash)](#context-intelligence-engine)
-6. [API Reference](#api-reference)
-7. [Quick Start — Local Run](#quick-start--local-run)
-8. [Quick Start — Docker Compose](#quick-start--docker-compose)
-9. [Zero-Touch Instrumentation Guide](#zero-touch-instrumentation-guide)
-10. [Project File Structure](#project-file-structure)
-11. [Testing & Verification](#testing--verification)
-12. [Packaging for Delivery](#packaging-for-delivery)
+6. [TraceForge Brain Bridge — Quick Start](#traceforge-brain-bridge--quick-start)
+7. [API Reference](#api-reference)
+8. [Quick Start — Local Run](#quick-start--local-run)
+9. [Quick Start — Docker Compose](#quick-start--docker-compose)
+10. [Zero-Touch Instrumentation Guide](#zero-touch-instrumentation-guide)
+11. [Project File Structure](#project-file-structure)
+12. [Testing & Verification](#testing--verification)
+13. [Packaging for Delivery](#packaging-for-delivery)
 
 ---
+
 
 ## What the Platform Does
 
@@ -261,6 +263,80 @@ GEMINI_API_KEY=your_gemini_api_key_here
 Navigate to **Memory Fabric** in the sidebar → paste your key into the Gemini Context Engine panel → click **Apply Key**. The key is saved to browser local storage and sent as a request header on every context synthesis call.
 
 ---
+
+## TraceForge Brain Bridge — Quick Start
+
+### 1. Install dependencies
+```bash
+pip install requests google-generativeai schedule python-dotenv
+```
+
+### 2. Configure
+```bash
+cp .env.example .env
+# edit .env with your keys
+```
+
+### 3. Run modes
+
+#### Once (test it)
+```bash
+python traceforge_obsidian_bridge.py
+```
+
+#### Continuous loop (every 15 min)
+```bash
+python traceforge_obsidian_bridge.py --loop
+```
+
+#### Specific session only
+```bash
+python traceforge_obsidian_bridge.py --session sess_abc123
+```
+
+---
+
+### 4. Automate with cron (Linux / Mac)
+
+Run `crontab -e` and add:
+```
+*/15 * * * * cd /path/to/bridge && python traceforge_obsidian_bridge.py >> logs/bridge.log 2>&1
+```
+
+### 5. Automate with Task Scheduler (Windows)
+
+```powershell
+$action  = New-ScheduledTaskAction -Execute "python" -Argument "C:\path\to\traceforge_obsidian_bridge.py" -WorkingDirectory "C:\path\to\bridge"
+$trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 15) -Once -At (Get-Date)
+Register-ScheduledTask -TaskName "TraceForge Brain Bridge" -Action $action -Trigger $trigger
+```
+
+---
+
+### What gets written to your vault
+
+```
+Daily Notes/
+  2026-06-10.md          ← brain sync section appended every 15 min
+
+Memory/
+  Sessions/
+    2026-06-10-sess_abc1.md   ← one note per session
+    2026-06-10-sess_def2.md
+  Graphs/
+    graph-2026-W24.md    ← weekly knowledge graph snapshot (Mondays)
+```
+
+### Obsidian Local REST API plugin setup
+
+1. Open Obsidian → Settings → Community Plugins → Browse
+2. Search "Local REST API" → Install → Enable
+3. Go to plugin settings → copy the API key
+4. Paste into `OBSIDIAN_APIKEY` in your `.env`
+5. Keep Obsidian open (or use `OBSIDIAN_VAULT` filesystem fallback)
+
+---
+
 
 ## API Reference
 

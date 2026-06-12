@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from ..database import get_db
-from .. import models, schemas
+from .. import models, schemas, simulator
 
 router = APIRouter(
     prefix="/api/v1/apps",
@@ -26,6 +26,10 @@ def register_app(app: schemas.RegisteredAppCreate, db: Session = Depends(get_db)
     db.add(db_app)
     db.commit()
     db.refresh(db_app)
+
+    # Auto-seed full observability telemetry for newly registered applications
+    simulator.generate_initial_app_telemetry(db, db_app)
+
     return db_app
 
 @router.get("/", response_model=List[schemas.RegisteredAppResponse])

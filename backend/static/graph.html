@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Application Knowledge Sharing Graph</title>
+  <script type="text/javascript" src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.2/styles/vis-network.min.css" />
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #f8fafc; color: #111827; }
+    .page-shell { max-width: 1500px; margin: 0 auto; padding: 18px; }
+    .header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+    .header h1 { margin: 0; font-size: 1.25rem; letter-spacing: -0.03em; }
+    .meta { color: #475569; font-size: 0.92rem; max-width: 720px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .toolbar button { border: 1px solid #cbd5e1; background: #ffffff; color: #0f172a; border-radius: 999px; padding: 8px 16px; font-size: 0.9rem; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
+    .toolbar button.active, .toolbar button:hover { background: #eff6ff; border-color: #7dd3fc; }
+    .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 18px; box-shadow: 0 18px 45px rgba(15,23,42,0.08); }
+    #network { width: 100%; height: 760px; border-radius: 16px; background: #ffffff; }
+    .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 16px; color: #475569; font-size: 0.9rem; }
+    .legend-item { display: flex; align-items: center; gap: 10px; }
+    .legend-color { width: 14px; height: 14px; border-radius: 999px; display: inline-block; }
+    .footer { margin-top: 18px; color: #475569; font-size: 0.9rem; line-height: 1.6; }
+    .status { display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 999px; font-size: 0.9rem; background: #ecfeff; color: #0f766e; border: 1px solid #86efac; }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <div class="header">
+      <div>
+        <h1>Live Application Knowledge Sharing Graph</h1>
+        <div class="meta">This view highlights knowledge shared between applications by collapsing session noise and showing only app-level relationships.</div>
+      </div>
+      <div class="status" id="status">Loading graph…</div>
+    </div>
+    <div class="toolbar">
+      <button id="btn-app-view" class="active">App knowledge sharing</button>
+      <button id="btn-full-view">Full graph</button>
+    </div>
+    <div class="card">
+      <div id="network"></div>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-color" style="background:#8b5cf6"></span> Application</div>
+        <div class="legend-item"><span class="legend-color" style="background:#f59e0b"></span> Service / App component</div>
+        <div class="legend-item"><span class="legend-color" style="background:#2563eb"></span> User</div>
+        <div class="legend-item"><span class="legend-color" style="background:#10b981"></span> Session</div>
+        <div class="legend-item"><span class="legend-color" style="background:#64748b"></span> Shared knowledge / app dependency</div>
+      </div>
+    </div>
+    <div class="footer">The app-only mode filters out session-level chatter and emphasizes app-to-app relationships. Switch to full graph to inspect raw entity-level data if needed.</div>
+  </div>
+  <script>
+    const container = document.getElementById('network');
+    const status = document.getElementById('status');
+    const btnAppView = document.getElementById('btn-app-view');
+    const btnFullView = document.getElementById('btn-full-view');
+    let network;
+    let viewMode = 'app';
+
+    const options = {
+      autoResize: true,
+      edges: {
+        color: '#64748b',
+        arrows: { to: { enabled: true, scaleFactor: 0.65 } },
+        smooth: { type: 'dynamic' }
+      },
+      nodes: {
+        shape: 'dot',
+        size: 20,
+        font: { size: 14, color: '#111827', multi: 'html' },
+        borderWidth: 2
+      },
+      physics: {
+        stabilization: true,
+        barnesHut: {
+          gravitationalConstant: -7000,
+          centralGravity: 0.35,
+          springLength: 150,
+          springConstant: 0.05,
+          damping: 0.35
+        }
+      },
+      interaction: {
+        hover: true,
+        tooltipDelay: 200,
+        navigationButtons: true,
+        keyboard: true
+      }
+    };
+
+    const typeColors = {
+      User: '#2563eb',
+      SESSION: '#10b981',
+      Session: '#10b981',
+      SERVICE: '#f59e0b',
+      Service: '#f59e0b',
+      APP: '#8b5cf6',
+      EVENT: '#ef4444',
+      Event: '#ef4444',
+      default: '#9ca3af'
+    };
+
+    function setActiveButton(mode) {
+      viewMode = mode;
+      btnAppView.classList.toggle('active', mode === 'app');
+      btnFullView.classList.toggle('active', mode === 'full');
+      loadGraph();
+    }
+    btnAppView.addEventListener('click', () => setActiveButton('app'));
+    btnFullView.addEventListener('click', () => setActiveButton('full'));
+
+    async function loadGraph() {
+      try {
+        const resp = await fetch('/api/v1/intelligence/graph');
+        const graph = await resp.json();
+        const nodeMap = new Map(graph.nodes.map(n => [n.id, n]));
+        const appTypes = new Set(['APP', 'SERVICE', 'Service']);
+        const appNodes = graph.nodes.filter(n => appTypes.has(n.type || n.group));
+        const appIds = new Set(appNodes.map(n => n.id));
+
+        const sessionConnections = new Map();
+        const directAppEdges = [];
+        const appEdges = [];
+
+        graph.links.forEach(link => {
+          const sourceType = nodeMap.get(link.source)?.type || nodeMap.get(link.source)?.group;
+          const targetType = nodeMap.get(link.target)?.type || nodeMap.get(link.target)?.group;
+
+          if (sourceType === 'APP' && targetType === 'APP') {
+            directAppEdges.push(link);
+            return;
+          }
+          if (sourceType === 'SESSION' && appIds.has(link.target)) {
+            const apps = sessionConnections.get(link.source) || new Set();
+            apps.add(link.target);
+            sessionConnections.set(link.source, apps);
+            return;
+          }
+          if (targetType === 'SESSION' && appIds.has(link.source)) {
+            const apps = sessionConnections.get(link.target) || new Set();
+            apps.add(link.source);
+            sessionConnections.set(link.target, apps);
+            return;
+          }
+        });
+
+        sessionConnections.forEach(appSet => {
+          const apps = Array.from(appSet);
+          for (let i = 0; i < apps.length; i++) {
+            for (let j = i + 1; j < apps.length; j++) {
+              appEdges.push({ source: apps[i], target: apps[j], relationship: 'shared context' });
+            }
+          }
+        });
+
+        const appData = {
+          nodes: appNodes.map(node => ({
+            id: node.id,
+            label: node.label,
+            title: `${node.type || node.group}`,
+            color: typeColors[node.type] || typeColors[node.group] || typeColors.default,
+            value: 2,
+            font: { size: 14 }
+          })),
+          edges: [...directAppEdges, ...appEdges].map(edge => ({
+            from: edge.source,
+            to: edge.target,
+            label: (edge.relationship || '').replace(/_/g, ' '),
+            arrows: 'to',
+            font: { align: 'middle', size: 12 },
+            color: { color: '#64748b' }
+          }))
+        };
+
+        const fullData = {
+          nodes: graph.nodes.map(node => ({
+            id: node.id,
+            label: node.label,
+            title: `${node.type || node.group}`,
+            color: typeColors[node.type] || typeColors[node.group] || typeColors.default,
+            value: 1.5,
+            font: { size: 12 }
+          })),
+          edges: graph.links.map(link => ({
+            from: link.source,
+            to: link.target,
+            label: (link.relationship || '').replace(/_/g, ' '),
+            arrows: 'to',
+            font: { align: 'middle', size: 10 },
+            color: { color: '#94a3b8' }
+          }))
+        };
+
+        let data;
+        if (viewMode === 'app') {
+          data = appData;
+          status.textContent = `Shared app knowledge view: ${appData.nodes.length} apps, ${appData.edges.length} links`;
+          if (appData.edges.length === 0) {
+            status.textContent = 'No shared app links available; showing full graph.';
+            data = fullData;
+          }
+        } else {
+          data = fullData;
+          status.textContent = `Full graph view: ${fullData.nodes.length} nodes, ${fullData.edges.length} edges`;
+        }
+
+        if (!network) {
+          network = new vis.Network(container, data, options);
+          network.on('selectNode', params => {
+            if (params.nodes.length > 0) {
+              const node = data.nodes.find(n => n.id === params.nodes[0]);
+              status.textContent = `Selected: ${node.label} (${node.title})`;
+            }
+          });
+        } else {
+          network.setData(data);
+        }
+      } catch (err) {
+        status.textContent = 'Graph load failed';
+        console.error('Graph load failed:', err);
+      }
+    }
+
+    loadGraph();
+    setInterval(loadGraph, 5000);
+  </script>
+</body>
+</html>

@@ -3,11 +3,13 @@ import random
 import time
 import uuid
 from sqlalchemy.orm import Session
-from ..database import SessionLocal, engine, Base
-from .. import models
+from .database import SessionLocal, engine, Base
+from . import models
 
-# Ensure tables are built
+# Ensure tables are built and schema is migrated
 Base.metadata.create_all(bind=engine)
+from .database import migrate_registered_app_owner_email_to_url
+migrate_registered_app_owner_email_to_url()
 
 def seed_default_applications(db: Session):
     apps_data = [
@@ -142,136 +144,321 @@ def seed_memory_fabric(db: Session):
     db.commit()
     print("✅ Memory fabric seeded.")
 
-def generate_telemetry_batch(db: Session, apps: dict):
-    """Generate LLM usage metrics for FrictionX application"""
-    
-    frictionx = apps.get("FrictionX")
-    
-    if not frictionx:
-        print("FrictionX application not found. Skipping telemetry batch.")
-        return
+def should_generate_llm_metrics(app: models.RegisteredApp) -> bool:
+    if not app:
+        return False
 
-    now = datetime.datetime.utcnow()
-    
-    # Generate realistic LLM usage patterns
-    # Number of LLM API calls per batch
-    num_calls = random.randint(15, 45)
-    
-    for _ in range(num_calls):
-        # Simulate different LLM models being used
-        models_list = ["gpt-4-turbo", "gpt-4", "gpt-3.5-turbo", "claude-3-opus", "claude-3-sonnet"]
-        model_used = random.choice(models_list)
-        
-        # Token counts (realistic ranges for different models)
-        if "gpt-4-turbo" in model_used or "gpt-4" in model_used:
-            input_tokens = random.randint(100, 2000)
-            output_tokens = random.randint(50, 1500)
-            cost_per_1m_input = 0.01  # $0.01 per 1M input tokens
-            cost_per_1m_output = 0.03  # $0.03 per 1M output tokens
-        elif "3.5" in model_used:
-            input_tokens = random.randint(50, 1000)
-            output_tokens = random.randint(30, 800)
-            cost_per_1m_input = 0.0005  # $0.0005 per 1M input tokens
-            cost_per_1m_output = 0.0015  # $0.0015 per 1M output tokens
-        else:  # Claude models
-            input_tokens = random.randint(80, 1500)
-            output_tokens = random.randint(40, 1200)
-            cost_per_1m_input = 0.003  # $0.003 per 1M input tokens
-            cost_per_1m_output = 0.015  # $0.015 per 1M output tokens
-        
-        total_tokens = input_tokens + output_tokens
-        cost_usd = (input_tokens * cost_per_1m_input / 1_000_000) + (output_tokens * cost_per_1m_output / 1_000_000)
-        
-        # Generate metrics for this LLM call
-        
-        # 1. Total tokens metric
-        db.add(models.MetricData(
-            app_id=frictionx.id,
-            metric_name="llm_total_tokens",
-            service_name="frictionx-llm-engine",
-            value=float(total_tokens),
-            timestamp=now - datetime.timedelta(seconds=random.randint(0, 30)),
-            labels={
-                "model": model_used,
-                "type": "total"
+    name = (app.name or "").lower()
+    tech = (app.tech_stack or "").lower()
+    url = (app.url or "").lower()
+
+    # Auto-generate LLM metrics for any app that declares LLM usage in tech stack
+    # or for common AI-enabled apps such as FlowTracer.
+    return (
+        "llm" in tech or
+        "ai" in tech or
+        "llm" in name or
+        "flowtracer" in name or
+        "llm" in url
+    )
+
+
+def normalize_service_name(value: str) -> str:
+    normalized = "".join(
+        ch.lower() if ch.isalnum() else "-" for ch in (value or "")
+    )
+    return "-".join(part for part in normalized.split("-") if part)
+
+
+def build_service_names_for_app(app: models.RegisteredApp) -> list[str]:
+    base = normalize_service_name(app.name)
+    tech = (app.tech_stack or "").lower()
+    services = [f"{base}-api"]
+
+    if any(keyword in tech for keyword in ["db", "sql", "postgres", "mysql", "mongodb"]):
+        services.append(f"{base}-db")
+
+    if any(keyword in tech for keyword in ["react", "frontend", "browser", "ui"]):
+        services.append(f"{base}-frontend")
+
+    if any(keyword in tech for keyword in ["python", "node", "fastapi", "flask", "dotnet", "java", "go"]):
+        services.append(f"{base}-backend")
+
+    if should_generate_llm_metrics(app):
+        services.append(f"{base}-llm-engine")
+
+    return list(dict.fromkeys(services))
+
+
+def build_trace_endpoints(app: models.RegisteredApp) -> list[str]:
+    endpoints = [
+        "/api/v1/health",
+        "/api/v1/metrics",
+        "/api/v1/logs",
+        "/api/v1/dashboards/overview",
+        "/api/v1/apps",
+        "/api/v1/apps/stats",
+        "/api/v1/intelligence/query",
+        "/api/v1/alerts"
+    ]
+    if "llm" in (app.tech_stack or "").lower() or "ai" in (app.tech_stack or "").lower():
+        endpoints.append("/api/v1/llm/invoke")
+    return endpoints
+
+
+def generate_trace_and_log_data_for_app(db: Session, app: models.RegisteredApp, base_time: datetime.datetime | None = None):
+    base_time = base_time or datetime.datetime.utcnow()
+    service_base = normalize_service_name(app.name)
+    endpoints = build_trace_endpoints(app)
+
+    for _ in range(random.randint(6, 14)):
+        trace_id = uuid.uuid4().hex
+        root_span_id = uuid.uuid4().hex
+        endpoint = random.choice(endpoints)
+        method = random.choice(["GET", "POST", "PUT", "PATCH", "DELETE"])
+        service_name = f"{service_base}-api"
+        duration_ms = random.uniform(50, 2200)
+        status_code = "ERROR" if random.random() < 0.14 else "OK"
+        if "health" in endpoint:
+            duration_ms = random.uniform(10, 120)
+        if "error" in endpoint or status_code == "ERROR":
+            status_code = "ERROR"
+
+        span_start = base_time - datetime.timedelta(seconds=random.randint(0, 180))
+        span_end = span_start + datetime.timedelta(milliseconds=duration_ms)
+
+        db.add(models.TraceSpan(
+            app_id=app.id,
+            trace_id=trace_id,
+            span_id=root_span_id,
+            parent_span_id=None,
+            name=f"{method} {endpoint}",
+            service_name=service_name,
+            start_time=span_start,
+            end_time=span_end,
+            duration_ms=duration_ms,
+            status_code=status_code,
+            status_message="OK" if status_code == "OK" else "Internal server error",
+            attributes={
+                "http.method": method,
+                "http.route": endpoint,
+                "app.name": app.name,
+                "operation.type": "request"
+            },
+            events=[{"name": "span.start", "time": span_start.isoformat()}, {"name": "span.end", "time": span_end.isoformat()}]
+        ))
+
+        if random.random() < 0.55:
+            child_span_id = uuid.uuid4().hex
+            child_service = f"{service_base}-db" if "db" in (app.tech_stack or "").lower() else f"{service_base}-backend"
+            child_duration = duration_ms * random.uniform(0.12, 0.42)
+            child_start = span_start + datetime.timedelta(milliseconds=random.uniform(5, 40))
+            child_end = child_start + datetime.timedelta(milliseconds=child_duration)
+            db.add(models.TraceSpan(
+                app_id=app.id,
+                trace_id=trace_id,
+                span_id=child_span_id,
+                parent_span_id=root_span_id,
+                name=f"DB Query for {endpoint}",
+                service_name=child_service,
+                start_time=child_start,
+                end_time=child_end,
+                duration_ms=child_duration,
+                status_code="OK",
+                status_message="DB query completed",
+                attributes={
+                    "db.system": "postgresql",
+                    "db.statement": "SELECT ...",
+                    "app.name": app.name
+                },
+                events=[{"name": "db.query.start", "time": child_start.isoformat()}, {"name": "db.query.end", "time": child_end.isoformat()}]
+            ))
+
+        log_severity = "ERROR" if status_code == "ERROR" else "WARN" if random.random() < 0.15 else "INFO"
+        log_message = (
+            f"{app.name} {method} {endpoint} returned {status_code} in {duration_ms:.0f}ms"
+            if log_severity != "ERROR"
+            else f"{app.name} encountered an error while serving {endpoint}."
+        )
+
+        log_time = span_start + datetime.timedelta(milliseconds=random.uniform(0, duration_ms))
+        db.add(models.LogData(
+            app_id=app.id,
+            trace_id=trace_id,
+            span_id=root_span_id,
+            service_name=service_name,
+            severity=log_severity,
+            message=log_message,
+            timestamp=log_time,
+            attributes={
+                "http.method": method,
+                "http.route": endpoint,
+                "http.status_code": 500 if log_severity == "ERROR" else 200,
+                "app.name": app.name
             }
         ))
-        
-        # 2. Input tokens metric
+
+
+def generate_standard_metrics_for_app(db: Session, app: models.RegisteredApp, base_time: datetime.datetime | None = None):
+    base_time = base_time or datetime.datetime.utcnow()
+    service_name = f"{normalize_service_name(app.name)}-api"
+    metric_names = [
+        "request_count",
+        "request_latency_ms",
+        "error_rate",
+        "cpu_utilization_pct",
+        "memory_usage_mb"
+    ]
+
+    for _ in range(random.randint(8, 16)):
+        timestamp = base_time - datetime.timedelta(seconds=random.randint(0, 240))
+        request_count = random.randint(10, 180)
+        latency = random.uniform(35, 1200)
+        error_rate = random.uniform(0.0, 0.16)
+        cpu = random.uniform(12.0, 90.0)
+        memory = random.uniform(90.0, 1450.0)
+
         db.add(models.MetricData(
-            app_id=frictionx.id,
-            metric_name="llm_input_tokens",
-            service_name="frictionx-llm-engine",
-            value=float(input_tokens),
-            timestamp=now - datetime.timedelta(seconds=random.randint(0, 30)),
-            labels={
-                "model": model_used,
-                "type": "input"
+            app_id=app.id,
+            metric_name="request_count",
+            service_name=service_name,
+            value=float(request_count),
+            timestamp=timestamp,
+            labels={"route": random.choice(build_trace_endpoints(app)), "app": app.name}
+        ))
+
+        db.add(models.MetricData(
+            app_id=app.id,
+            metric_name="request_latency_ms",
+            service_name=service_name,
+            value=float(latency),
+            timestamp=timestamp,
+            labels={"app": app.name}
+        ))
+
+        db.add(models.MetricData(
+            app_id=app.id,
+            metric_name="error_rate",
+            service_name=service_name,
+            value=float(round(error_rate, 4)),
+            timestamp=timestamp,
+            labels={"app": app.name}
+        ))
+
+        db.add(models.MetricData(
+            app_id=app.id,
+            metric_name="cpu_utilization_pct",
+            service_name=service_name,
+            value=float(round(cpu, 2)),
+            timestamp=timestamp,
+            labels={"app": app.name}
+        ))
+
+        db.add(models.MetricData(
+            app_id=app.id,
+            metric_name="memory_usage_mb",
+            service_name=service_name,
+            value=float(round(memory, 2)),
+            timestamp=timestamp,
+            labels={"app": app.name}
+        ))
+
+        if latency > 1100:
+            evaluate_rule(db, app.id, service_name, "request_latency_ms", latency, 1000.0, "HighRequestLatency", "WARNING")
+        if error_rate > 0.08:
+            evaluate_rule(db, app.id, service_name, "error_rate", error_rate, 0.08, "HighErrorRate", "CRITICAL")
+
+
+def generate_audit_events_for_app(db: Session, app: models.RegisteredApp, base_time: datetime.datetime | None = None):
+    """Generate realistic audit events for app activity."""
+    base_time = base_time or datetime.datetime.utcnow()
+    
+    users = [
+        {"id": "user_001", "email": "admin@company.com"},
+        {"id": "user_002", "email": "dev@company.com"},
+        {"id": "user_003", "email": "ops@company.com"},
+    ]
+    
+    actions = [
+        "USER_LOGIN", "CONFIG_CHANGE", "DATA_ACCESS", "API_CALL", 
+        "REPORT_GENERATED", "ALERT_ACKNOWLEDGED", "SYSTEM_UPDATE"
+    ]
+    
+    resources = ["Dashboard", "Metrics", "Configuration", "API", "Alerts", "Logs"]
+    
+    for _ in range(random.randint(5, 12)):
+        timestamp = base_time - datetime.timedelta(seconds=random.randint(0, 600))
+        user = random.choice(users)
+        
+        db.add(models.AuditEvent(
+            app_id=app.id,
+            user_id=user["id"],
+            user_email=user["email"],
+            action=random.choice(actions),
+            resource=random.choice(resources),
+            status=random.choice(["SUCCESS", "FAILURE"]),
+            ip_address=f"192.168.{random.randint(1,255)}.{random.randint(1,255)}",
+            timestamp=timestamp,
+            details={
+                "resource_id": f"res_{uuid.uuid4().hex[:8]}",
+                "change_type": random.choice(["create", "update", "delete", "read"]),
+                "app": app.name
             }
         ))
+
+
+def generate_llm_usage_metrics_for_app(db: Session, app: models.RegisteredApp, base_time: datetime.datetime | None = None):
+    """Generate LLM-specific metrics (tokens, latency, costs) for LLM-enabled apps."""
+    if not should_generate_llm_metrics(app):
+        return
         
-        # 3. Output tokens metric
-        db.add(models.MetricData(
-            app_id=frictionx.id,
-            metric_name="llm_output_tokens",
-            service_name="frictionx-llm-engine",
-            value=float(output_tokens),
-            timestamp=now - datetime.timedelta(seconds=random.randint(0, 30)),
-            labels={
-                "model": model_used,
-                "type": "output"
-            }
-        ))
-        
-        # 4. Cost metric (in USD)
-        db.add(models.MetricData(
-            app_id=frictionx.id,
-            metric_name="llm_cost_usd",
-            service_name="frictionx-llm-engine",
-            value=cost_usd,
-            timestamp=now - datetime.timedelta(seconds=random.randint(0, 30)),
-            labels={
-                "model": model_used,
-                "currency": "USD"
-            }
-        ))
-        
-        # 5. Response time metric (in milliseconds)
-        response_time = random.uniform(100, 3500)
-        db.add(models.MetricData(
-            app_id=frictionx.id,
-            metric_name="llm_response_time_ms",
-            service_name="frictionx-llm-engine",
-            value=response_time,
-            timestamp=now - datetime.timedelta(seconds=random.randint(0, 30)),
-            labels={
-                "model": model_used
-            }
-        ))
+    base_time = base_time or datetime.datetime.utcnow()
+    service_name = f"{normalize_service_name(app.name)}-llm-engine"
     
-    # Summary aggregates for the batch
-    total_batch_tokens = sum([random.randint(150, 2500) for _ in range(num_calls)])
-    total_batch_cost = (total_batch_tokens / 1_000_000) * 0.75  # Average cost
+    llm_metrics = [
+        ("llm.tokens.input", random.randint(100, 5000)),
+        ("llm.tokens.output", random.randint(50, 2000)),
+        ("llm.request.latency_ms", random.uniform(200, 5000)),
+        ("llm.request.cost_usd", random.uniform(0.001, 0.5)),
+        ("llm.cache_hit_rate_pct", random.uniform(0, 100)),
+        ("llm.prompt_caching_efficiency", random.uniform(0.5, 1.0)),
+    ]
     
-    db.add(models.MetricData(
-        app_id=frictionx.id,
-        metric_name="llm_batch_total_tokens",
-        service_name="frictionx-llm-engine",
-        value=float(total_batch_tokens),
-        timestamp=now,
-        labels={"batch_size": str(num_calls)}
-    ))
-    
-    db.add(models.MetricData(
-        app_id=frictionx.id,
-        metric_name="llm_batch_cost_usd",
-        service_name="frictionx-llm-engine",
-        value=total_batch_cost,
-        timestamp=now,
-        labels={"batch_size": str(num_calls)}
-    ))
-    
+    for _ in range(random.randint(4, 8)):
+        timestamp = base_time - datetime.timedelta(seconds=random.randint(0, 300))
+        for metric_name, base_value in llm_metrics:
+            # Add some variance to values
+            if "rate" in metric_name or "efficiency" in metric_name:
+                value = base_value + random.uniform(-5, 5)
+                value = max(0, min(100, value)) if "rate" in metric_name else max(0, min(1.0, value))
+            else:
+                variance = base_value * 0.2  # 20% variance
+                value = base_value + random.uniform(-variance, variance)
+            
+            db.add(models.MetricData(
+                app_id=app.id,
+                metric_name=metric_name,
+                service_name=service_name,
+                value=float(round(value, 2)),
+                timestamp=timestamp,
+                labels={"app": app.name, "llm_engine": "gemini-2.5-flash"}
+            ))
+
+
+def generate_initial_app_telemetry(db: Session, app: models.RegisteredApp, base_time: datetime.datetime | None = None):
+    base_time = base_time or datetime.datetime.utcnow()
+    generate_standard_metrics_for_app(db, app, base_time)
+    generate_trace_and_log_data_for_app(db, app, base_time)
+    generate_audit_events_for_app(db, app, base_time)
+    generate_llm_usage_metrics_for_app(db, app, base_time)
     db.commit()
+
+
+def generate_telemetry_batch(db: Session, apps: dict, base_time: datetime.datetime | None = None):
+    """Generate simulated application telemetry data for all registered applications."""
+    base_time = base_time or datetime.datetime.utcnow()
+    for app in apps.values():
+        generate_initial_app_telemetry(db, app, base_time)
 
 
 def evaluate_rule(db: Session, app_id: int, service_name: str, metric_name: str, value: float, threshold: float, rule_name: str, severity: str):

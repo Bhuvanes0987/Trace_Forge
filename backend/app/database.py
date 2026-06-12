@@ -19,18 +19,25 @@ Base = declarative_base()
 
 
 def migrate_registered_app_owner_email_to_url():
+    """Remove deprecated owner_email column and ensure url column exists."""
     inspector = inspect(engine)
     if "registered_apps" not in inspector.get_table_names():
         return
 
     columns = [column["name"] for column in inspector.get_columns("registered_apps")]
-    if "url" in columns:
-        return
-
+    
     with engine.begin() as conn:
+        # If old owner_email column exists, drop it (url should exist from model)
         if "owner_email" in columns:
-            conn.execute(text("ALTER TABLE registered_apps RENAME COLUMN owner_email TO url"))
-        else:
+            try:
+                conn.execute(text("ALTER TABLE registered_apps DROP COLUMN owner_email"))
+            except Exception as e:
+                # SQLite doesn't support DROP COLUMN in older versions
+                # Just log and continue—the column won't cause issues if url exists
+                pass
+        
+        # Ensure url column exists (should be added by model)
+        if "url" not in columns:
             conn.execute(text("ALTER TABLE registered_apps ADD COLUMN url VARCHAR(255)"))
 
 
