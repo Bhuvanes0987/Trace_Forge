@@ -24,6 +24,7 @@ import Audit from './pages/Audit';
 import Alerts from './pages/Alerts';
 import LLMUsage from './pages/LLMUsage';
 import { MemoryFabric } from './pages/MemoryFabric';
+import MemoryFabricDashboard from './pages/MemoryFabricDashboard';
 
 export interface AppInfo {
   id: number;
@@ -146,6 +147,14 @@ const App: React.FC = () => {
           </button>
 
           <button
+            className={`nav-item ${activeTab === 'memory_fabric_dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('memory_fabric_dashboard')}
+          >
+            <Brain />
+            Memory Intelligence
+          </button>
+
+          <button
             className={`nav-item ${activeTab === 'logs' ? 'active' : ''}`}
             onClick={() => setActiveTab('logs')}
           >
@@ -195,6 +204,7 @@ const App: React.FC = () => {
             <h2 style={{ textTransform: 'capitalize' }}>
               {activeTab === 'apps' ? 'Application Governance & Snippets'
                 : activeTab === 'hosted_apps' ? 'Hosted Applications'
+                : activeTab === 'memory_fabric_dashboard' ? 'Memory Fabric Dashboard'
                   : `${activeTab} Dashboard`}
             </h2>
           </div>
@@ -280,6 +290,12 @@ const App: React.FC = () => {
           )}
           {activeTab === 'memory_fabric' && (
             <MemoryFabric
+              selectedAppId={selectedAppId}
+              refreshTrigger={refreshTrigger}
+            />
+          )}
+          {activeTab === 'memory_fabric_dashboard' && (
+            <MemoryFabricDashboard
               selectedAppId={selectedAppId}
               refreshTrigger={refreshTrigger}
             />

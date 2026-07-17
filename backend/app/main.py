@@ -45,9 +45,9 @@ def startup_event():
         # Generate initial telemetry batch
         simulator.generate_telemetry_batch(db, apps)
         db.close()
-        print("✅ Startup data seeding complete.")
+        print("Startup data seeding complete.")
     except Exception as e:
-        print(f"⚠️ Startup seeding error (non-fatal): {e}")
+        print(f"Startup seeding error (non-fatal): {e}")
 
 # Register Core Routers
 app.include_router(apps.router)
