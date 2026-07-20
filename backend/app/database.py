@@ -4,11 +4,12 @@ from .config import settings
 
 # Adjust sqlite connection args
 connect_args = {}
-if settings.DATABASE_URL.startswith("sqlite"):
+db_url = settings.get_database_url
+if db_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 
 engine = create_engine(
-    settings.DATABASE_URL, 
+    db_url, 
     connect_args=connect_args,
     pool_pre_ping=True
 )

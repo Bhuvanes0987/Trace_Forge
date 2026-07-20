@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 from sqlalchemy.orm import Session
+import json
+import datetime
 from typing import List
 
 from ..database import get_db
@@ -162,7 +164,8 @@ def build_otel_environment_snippet(app_name: str, api_key: str) -> str:
         "export OTEL_METRIC_EXPORT_TIMEOUT=30000\n"
         "export OTEL_PYTHON_LOG_CORRELATION=true\n"
         "export OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true\n"
-        "export OTEL_PYTHON_LOG_LEVEL=debug"
+        "export OTEL_PYTHON_LOG_LEVEL=debug\n"
+        "export TRACELOOP_TRACE_CONTENT=true"
     )
 
 
@@ -190,7 +193,8 @@ def build_otel_docker_compose_snippet(app_name: str, api_key: str) -> str:
         "  - OTEL_METRIC_EXPORT_TIMEOUT=30000\n"
         "  - OTEL_PYTHON_LOG_CORRELATION=true\n"
         "  - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true\n"
-        "  - OTEL_PYTHON_LOG_LEVEL=debug"
+        "  - OTEL_PYTHON_LOG_LEVEL=debug\n"
+        "  - TRACELOOP_TRACE_CONTENT=true"
     )
 
 
@@ -217,7 +221,8 @@ def build_otel_env_file_snippet(app_name: str, api_key: str) -> str:
         "OTEL_METRIC_EXPORT_TIMEOUT=30000\n"
         "OTEL_PYTHON_LOG_CORRELATION=true\n"
         "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true\n"
-        "OTEL_PYTHON_LOG_LEVEL=debug"
+        "OTEL_PYTHON_LOG_LEVEL=debug\n"
+        "TRACELOOP_TRACE_CONTENT=true"
     )
 
 
@@ -225,3 +230,134 @@ def settings_header_key():
     from ..config import settings
     return settings.INGEST_API_KEY_HEADER
 
+
+def get_app_from_api_key(request: Request, db: Session):
+    from ..config import settings
+    header_key = settings.INGEST_API_KEY_HEADER.lower()
+    api_key = request.headers.get(header_key)
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key header")
+    app = db.query(models.RegisteredApp).filter(models.RegisteredApp.api_key == api_key).first()
+    if not app:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return app
+
+
+def parse_otlp_attributes(attrs_list):
+    res = {}
+    if not attrs_list: return res
+    for attr in attrs_list:
+        key = attr.get("key")
+        val_obj = attr.get("value", {})
+        if "stringValue" in val_obj: res[key] = val_obj["stringValue"]
+        elif "intValue" in val_obj: res[key] = int(val_obj["intValue"])
+        elif "doubleValue" in val_obj: res[key] = float(val_obj["doubleValue"])
+        elif "boolValue" in val_obj: res[key] = bool(val_obj["boolValue"])
+        elif "arrayValue" in val_obj:
+            res[key] = [list(v.values())[0] for v in val_obj["arrayValue"].get("values", []) if v]
+    return res
+
+
+@router.post("/ingest/otlp/v1/traces", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_otlp_traces(request: Request, db: Session = Depends(get_db)):
+    app = get_app_from_api_key(request, db)
+    payload = await request.json()
+    
+    for resource_span in payload.get("resourceSpans", []):
+        resource = resource_span.get("resource", {})
+        res_attrs = parse_otlp_attributes(resource.get("attributes", []))
+        service_name = res_attrs.get("service.name", app.name)
+        
+        for scope_span in resource_span.get("scopeSpans", []):
+            for span in scope_span.get("spans", []):
+                span_attrs = parse_otlp_attributes(span.get("attributes", []))
+                
+                start_ns = int(span.get("startTimeUnixNano", 0))
+                end_ns = int(span.get("endTimeUnixNano", 0))
+                duration_ms = (end_ns - start_ns) / 1_000_000.0 if end_ns > start_ns else 0.0
+                
+                db_span = models.TraceSpan(
+                    app_id=app.id,
+                    trace_id=span.get("traceId", ""),
+                    span_id=span.get("spanId", ""),
+                    parent_span_id=span.get("parentSpanId"),
+                    name=span.get("name", "unnamed_span"),
+                    service_name=service_name,
+                    start_time=datetime.datetime.utcfromtimestamp(start_ns / 1e9) if start_ns else datetime.datetime.utcnow(),
+                    end_time=datetime.datetime.utcfromtimestamp(end_ns / 1e9) if end_ns else datetime.datetime.utcnow(),
+                    duration_ms=duration_ms,
+                    status_code="ERROR" if span.get("status", {}).get("code") == 2 else "OK",
+                    status_message=span.get("status", {}).get("message"),
+                    attributes=span_attrs
+                )
+                db.add(db_span)
+    db.commit()
+    return {"status": "accepted"}
+
+
+@router.post("/ingest/otlp/v1/metrics", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_otlp_metrics(request: Request, db: Session = Depends(get_db)):
+    app = get_app_from_api_key(request, db)
+    payload = await request.json()
+    
+    for resource_metric in payload.get("resourceMetrics", []):
+        resource = resource_metric.get("resource", {})
+        res_attrs = parse_otlp_attributes(resource.get("attributes", []))
+        service_name = res_attrs.get("service.name", app.name)
+        
+        for scope_metric in resource_metric.get("scopeMetrics", []):
+            for metric in scope_metric.get("metrics", []):
+                metric_name = metric.get("name", "unnamed_metric")
+                data_points = []
+                if "gauge" in metric: data_points = metric["gauge"].get("dataPoints", [])
+                elif "sum" in metric: data_points = metric["sum"].get("dataPoints", [])
+                
+                for dp in data_points:
+                    val = dp.get("asDouble") or dp.get("asInt") or 0.0
+                    ts_ns = int(dp.get("timeUnixNano", 0))
+                    labels = parse_otlp_attributes(dp.get("attributes", []))
+                    
+                    db_metric = models.MetricData(
+                        app_id=app.id,
+                        metric_name=metric_name,
+                        service_name=service_name,
+                        value=float(val),
+                        timestamp=datetime.datetime.utcfromtimestamp(ts_ns / 1e9) if ts_ns else datetime.datetime.utcnow(),
+                        labels=labels
+                    )
+                    db.add(db_metric)
+    db.commit()
+    return {"status": "accepted"}
+
+
+@router.post("/ingest/otlp/v1/logs", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_otlp_logs(request: Request, db: Session = Depends(get_db)):
+    app = get_app_from_api_key(request, db)
+    payload = await request.json()
+    
+    for resource_log in payload.get("resourceLogs", []):
+        resource = resource_log.get("resource", {})
+        res_attrs = parse_otlp_attributes(resource.get("attributes", []))
+        service_name = res_attrs.get("service.name", app.name)
+        
+        for scope_log in resource_log.get("scopeLogs", []):
+            for log_record in scope_log.get("logRecords", []):
+                attrs = parse_otlp_attributes(log_record.get("attributes", []))
+                ts_ns = int(log_record.get("timeUnixNano", 0))
+                
+                body = log_record.get("body", {})
+                message = body.get("stringValue", str(body))
+                
+                db_log = models.LogData(
+                    app_id=app.id,
+                    trace_id=log_record.get("traceId"),
+                    span_id=log_record.get("spanId"),
+                    service_name=service_name,
+                    severity=log_record.get("severityText", "INFO"),
+                    message=message,
+                    timestamp=datetime.datetime.utcfromtimestamp(ts_ns / 1e9) if ts_ns else datetime.datetime.utcnow(),
+                    attributes=attrs
+                )
+                db.add(db_log)
+    db.commit()
+    return {"status": "accepted"}

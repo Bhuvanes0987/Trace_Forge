@@ -38,7 +38,7 @@ class TraceSpan(Base):
     end_time = Column(DateTime, nullable=False)
     duration_ms = Column(Float, nullable=False)
     status_code = Column(String(50), default="UNSET") # OK, ERROR, UNSET
-    status_message = Column(String(500), nullable=True)
+    status_message = Column(Text, nullable=True)
     attributes = Column(JSON, nullable=True)
     events = Column(JSON, nullable=True)
 
